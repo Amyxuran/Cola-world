@@ -1,0 +1,2349 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;400&display=swap" rel="stylesheet">
+<title>Cola's World</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; width: 100vw; height: 100vh; }
+  canvas { display: block; }
+  #ui {
+    position: fixed;
+    bottom: 32px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(255,255,255,0.75);
+    font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-shadow: 0 1px 6px rgba(0,0,0,0.5);
+    transition: opacity 1.5s ease;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  /* ── SPLASH ── */
+  #splash {
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 55%, #1a1530 0%, #0b0c1a 60%, #050710 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 100;
+    transition: opacity 1.2s ease;
+    user-select: none;
+  }
+  #splash.hidden { opacity: 0; pointer-events: none; }
+
+  #splash-title {
+    font-family: 'STSong', 'Songti SC', 'SimSun', 'Georgia', serif;
+    font-size: clamp(36px, 6vw, 72px);
+    font-weight: 300;
+    letter-spacing: 0.22em;
+    color: rgba(235, 228, 210, 0.92);
+    text-shadow:
+      0 0 40px rgba(180,160,120,0.45),
+      0 0 80px rgba(140,120,90,0.18);
+    animation: breathe 3.2s ease-in-out infinite;
+  }
+  #splash-subtitle {
+    margin-top: 22px;
+    font-family: 'PingFang SC', 'Hiragino Sans GB', 'STSong', serif;
+    font-size: clamp(13px, 1.8vw, 17px);
+    letter-spacing: 0.45em;
+    color: rgba(200, 190, 170, 0.52);
+    animation: breathe 3.2s ease-in-out infinite;
+    animation-delay: 0.4s;
+  }
+  #splash-hint {
+    margin-top: 52px;
+    font-family: 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+    font-size: 12px;
+    letter-spacing: 0.3em;
+    color: rgba(180, 170, 155, 0.35);
+    animation: pulse-hint 2.4s ease-in-out infinite;
+  }
+  #splash-deco {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+  }
+  .splash-star {
+    position: absolute;
+    border-radius: 50%;
+    background: rgba(230,220,200,0.6);
+    animation: twinkle-css var(--dur) ease-in-out infinite;
+    animation-delay: var(--delay);
+  }
+  @keyframes breathe {
+    0%, 100% { transform: scale(1);    opacity: 1; }
+    50%       { transform: scale(1.04); opacity: 0.85; }
+  }
+  @keyframes pulse-hint {
+    0%, 100% { opacity: 0.35; }
+    50%       { opacity: 0.7; }
+  }
+  @keyframes twinkle-css {
+    0%, 100% { opacity: 0.15; transform: scale(1); }
+    50%       { opacity: 0.8;  transform: scale(1.5); }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── SPLASH SCREEN ── -->
+<div id="splash">
+  <div id="splash-deco"></div>
+  <div id="splash-title">Cola's World</div>
+  <div id="splash-subtitle">走 进 去</div>
+  <div id="splash-hint">点击任意处进入</div>
+</div>
+
+<canvas id="c"></canvas>
+<div id="ui">← → 移动 &nbsp;·&nbsp; E 放下一个东西 &nbsp;·&nbsp; Q 切换</div>
+
+<script>
+// ─────────────────────────────────────────────
+//  COLA'S WORLD  —  2D watercolor side-scroller
+// ─────────────────────────────────────────────
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W, H;
+function resize() {
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  rebuildScene();
+}
+window.addEventListener('resize', resize);
+
+// ── SPLASH ────────────────────────────────────
+let gameStarted = false;
+const splashEl = document.getElementById('splash');
+
+// populate splash stars
+(function() {
+  const deco = document.getElementById('splash-deco');
+  for (let i = 0; i < 80; i++) {
+    const s = document.createElement('div');
+    s.className = 'splash-star';
+    const sz = 1 + Math.random() * 2;
+    s.style.cssText = `
+      width:${sz}px; height:${sz}px;
+      left:${Math.random()*100}%;
+      top:${Math.random()*100}%;
+      --dur:${2 + Math.random()*4}s;
+      --delay:-${Math.random()*5}s;
+    `;
+    deco.appendChild(s);
+  }
+})();
+
+function startGame() {
+  if (gameStarted) return;
+  gameStarted = true;
+  splashEl.classList.add('hidden');
+  initAudio();
+  // remove splash from DOM after fade
+  setTimeout(() => { splashEl.remove(); }, 1400);
+}
+
+splashEl.addEventListener('click', startGame);
+splashEl.addEventListener('keydown', startGame);
+
+// ── TIME ──────────────────────────────────────
+const DAY_DURATION = 8 * 60 * 1000; // 8 min real time
+let startTime = Date.now();
+function getDayT() {
+  return ((Date.now() - startTime) % DAY_DURATION) / DAY_DURATION; // 0–1
+}
+
+// Sky palette — keyframes at t positions
+const SKY_KEYS = [
+  { t: 0.00, top: [14,18,48],    bot: [22,28,72]  },  // pre-dawn deep navy
+  { t: 0.10, top: [42,30,68],    bot: [180,110,90]},  // dawn purple/peach
+  { t: 0.18, top: [190,140,120], bot: [235,195,155]},  // sunrise warm
+  { t: 0.28, top: [145,195,230], bot: [215,235,245]},  // morning pale blue
+  { t: 0.50, top: [90,165,220],  bot: [185,220,245]},  // noon bright
+  { t: 0.72, top: [210,155,90],  bot: [235,195,130]},  // late afternoon amber
+  { t: 0.82, top: [75,48,95],    bot: [215,120,80]},   // dusk purple/orange
+  { t: 0.90, top: [25,22,55],    bot: [68,55,95]  },   // evening
+  { t: 1.00, top: [14,18,48],    bot: [22,28,72]  },   // night (same as 0)
+];
+
+// Horizon glow / haze warm band keyframes
+const HORIZON_KEYS = [
+  { t: 0.00, col: [20,18,50],    alpha: 0.0 },
+  { t: 0.10, col: [210,120,80],  alpha: 0.38 }, // dawn: warm peach band
+  { t: 0.18, col: [240,180,110], alpha: 0.42 }, // sunrise
+  { t: 0.28, col: [210,200,170], alpha: 0.18 }, // morning, faint
+  { t: 0.50, col: [200,215,230], alpha: 0.10 }, // noon, very subtle haze
+  { t: 0.72, col: [240,175,90],  alpha: 0.32 }, // afternoon glow
+  { t: 0.82, col: [220,100,70],  alpha: 0.48 }, // dusk: orange glow
+  { t: 0.90, col: [70,45,90],    alpha: 0.22 }, // evening
+  { t: 1.00, col: [20,18,50],    alpha: 0.0 },
+];
+
+function lerpRGB(a, b, t) {
+  return [a[0]+( b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t];
+}
+function rgb(c) { return `rgb(${c[0]|0},${c[1]|0},${c[2]|0})`; }
+function rgba(c, a) { return `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`; }
+
+function getSkyColors(t) {
+  let k0 = SKY_KEYS[0], k1 = SKY_KEYS[1];
+  for (let i = 0; i < SKY_KEYS.length - 1; i++) {
+    if (t >= SKY_KEYS[i].t && t <= SKY_KEYS[i+1].t) { k0 = SKY_KEYS[i]; k1 = SKY_KEYS[i+1]; break; }
+  }
+  const span = k1.t - k0.t || 0.001;
+  const f = (t - k0.t) / span;
+  return { top: lerpRGB(k0.top, k1.top, f), bot: lerpRGB(k0.bot, k1.bot, f) };
+}
+
+function getHorizonGlow(t) {
+  let k0 = HORIZON_KEYS[0], k1 = HORIZON_KEYS[1];
+  for (let i = 0; i < HORIZON_KEYS.length - 1; i++) {
+    if (t >= HORIZON_KEYS[i].t && t <= HORIZON_KEYS[i+1].t) { k0 = HORIZON_KEYS[i]; k1 = HORIZON_KEYS[i+1]; break; }
+  }
+  const span = k1.t - k0.t || 0.001;
+  const f = (t - k0.t) / span;
+  return { col: lerpRGB(k0.col, k1.col, f), alpha: k0.alpha + (k1.alpha - k0.alpha) * f };
+}
+
+// ── WORLD ─────────────────────────────────────
+const WORLD_W = 5500;
+const GROUND_Y_BASE = 0.72; // fraction of H
+
+// ── CAMERA ────────────────────────────────────
+let camX = 0;
+let targetCamX = 0;
+
+// ── PLAYER ────────────────────────────────────
+const player = {
+  x: WORLD_W / 2,
+  y: 0,
+  vx: 0,
+  facing: 1,  // 1=right, -1=left
+  walkTime: 0,
+  isWalking: false,
+  speed: 3.2,
+};
+
+// ── INPUT ──────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (e.key === 'e' || e.key === 'E') placeTrace();
+  if (e.key === 'q' || e.key === 'Q') cycleTraceType();
+  if (!gameStarted) startGame();
+  e.preventDefault();
+});
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+// ── TRACES ────────────────────────────────────
+const TRACE_TYPES = ['石头', '花', '纸鹤'];
+let traceTypeIdx = 0;
+let traces = [];
+
+function cycleTraceType() {
+  traceTypeIdx = (traceTypeIdx + 1) % TRACE_TYPES.length;
+}
+function placeTrace() {
+  const groundY = getGroundY(player.x);
+  traces.push({ type: TRACE_TYPES[traceTypeIdx], x: player.x, y: groundY, seed: Math.random() * 999 | 0 });
+  saveTraces();
+}
+function saveTraces() {
+  try { localStorage.setItem('colaTraces', JSON.stringify(traces)); } catch(e) {}
+}
+function loadTraces() {
+  try {
+    const d = localStorage.getItem('colaTraces');
+    if (d) traces = JSON.parse(d);
+  } catch(e) {}
+}
+loadTraces();
+
+// ── TERRAIN ───────────────────────────────────
+let groundProfile = [];
+function buildGround() {
+  groundProfile = [];
+  const baseY = H * GROUND_Y_BASE;
+  for (let x = 0; x <= WORLD_W; x += 4) {
+    const roll = Math.sin(x * 0.0007) * H * 0.04
+               + Math.sin(x * 0.0019 + 1.3) * H * 0.025
+               + Math.sin(x * 0.004 + 2.1) * H * 0.012;
+    groundProfile.push(baseY + roll);
+  }
+}
+
+function getGroundY(wx) {
+  const idx = Math.max(0, Math.min(groundProfile.length - 1, (wx / 4) | 0));
+  return groundProfile[idx];
+}
+
+// ── SCENE ELEMENTS ────────────────────────────
+let mountains = [];
+let midTrees   = [];
+let farTrees   = [];
+let grassBlades = [];
+let flowers    = [];
+let dustParticles = [];
+
+function seededRand(seed) {
+  let x = Math.sin(seed) * 43758.5453123;
+  return x - Math.floor(x);
+}
+
+function buildMountains() {
+  mountains = [];
+  const configs = [
+    { depth: 0, count: 7, color: [88, 95, 118],   alpha: 0.55, hScale: 0.32, parallax: 0.05 },
+    { depth: 1, count: 9, color: [105,115, 130],   alpha: 0.60, hScale: 0.26, parallax: 0.10 },
+    { depth: 2, count:12, color: [120,130, 118],   alpha: 0.65, hScale: 0.20, parallax: 0.15 },
+    { depth: 3, count:15, color: [135,148, 128],   alpha: 0.70, hScale: 0.15, parallax: 0.20 },
+  ];
+  for (const cfg of configs) {
+    const range = [];
+    for (let i = 0; i < cfg.count; i++) {
+      range.push({
+        cx:    seededRand(cfg.depth * 200 + i * 17) * WORLD_W,
+        width: W * (0.25 + seededRand(cfg.depth * 200 + i * 17 + 1) * 0.45),
+        height: H * (cfg.hScale + seededRand(cfg.depth * 200 + i * 17 + 2) * 0.10),
+        jagged: Array.from({length: 8}, (_, j) => seededRand(cfg.depth * 200 + i * 17 + 10 + j) * 0.4 - 0.2),
+        // extra texture layers: secondary alpha-offset silhouette
+        texOffset: seededRand(cfg.depth * 200 + i * 17 + 80) * 18 - 9,
+        texAlpha:  0.08 + seededRand(cfg.depth * 200 + i * 17 + 81) * 0.12,
+      });
+    }
+    mountains.push({ ...cfg, range });
+  }
+}
+
+function buildMidTrees() {
+  midTrees = [];
+  const count = 90;
+  for (let i = 0; i < count; i++) {
+    const sx = seededRand(i * 31 + 7);
+    const x = sx * WORLD_W;
+    const groundY = getGroundY(x);
+    const h = H * (0.12 + seededRand(i * 31 + 8) * 0.10);
+    const w = h * (0.55 + seededRand(i * 31 + 9) * 0.4);
+    // wider hue range: warm greens (hue ~85-110) and cool blue-greens (hue ~145-175)
+    const hueGroup = seededRand(i * 31 + 14) > 0.5 ? 0 : 1;
+    const hue = hueGroup === 0
+      ? 85  + seededRand(i * 31 + 11) * 25   // warm yellow-green
+      : 148 + seededRand(i * 31 + 11) * 28;  // cool blue-green/teal
+    const sat = 20 + seededRand(i * 31 + 12) * 22;
+    const lit = 26 + seededRand(i * 31 + 13) * 18;
+    midTrees.push({ x, groundY, h, w, hue, sat, lit, seed: i * 31 });
+  }
+}
+
+function buildFarTrees() {
+  farTrees = [];
+  const count = 60;
+  for (let i = 0; i < count; i++) {
+    const x = seededRand(i * 53 + 3) * WORLD_W;
+    const groundY = H * (GROUND_Y_BASE - 0.02);
+    const h = H * (0.08 + seededRand(i * 53 + 4) * 0.07);
+    const w = h * (0.5 + seededRand(i * 53 + 5) * 0.4);
+    const hueGroup = seededRand(i * 53 + 9) > 0.5 ? 0 : 1;
+    const hue = hueGroup === 0
+      ? 92  + seededRand(i * 53 + 6) * 20
+      : 150 + seededRand(i * 53 + 6) * 20;
+    const sat = 12 + seededRand(i * 53 + 7) * 15;
+    const lit = 35 + seededRand(i * 53 + 8) * 15;
+    farTrees.push({ x, groundY, h, w, hue, sat, lit, seed: i * 53 });
+  }
+}
+
+function buildGrass() {
+  grassBlades = [];
+  // front layer: shorter, denser
+  const frontCount = 1100;
+  for (let i = 0; i < frontCount; i++) {
+    const x = seededRand(i * 71 + 1) * WORLD_W;
+    const gY = getGroundY(x);
+    const h = H * (0.028 + seededRand(i * 71 + 2) * 0.038); // shorter
+    const angle = (seededRand(i * 71 + 3) - 0.5) * 0.42;
+    const width = 1.4 + seededRand(i * 71 + 4) * 1.8;
+    // color variation: some warm yellow-green, some cool blue-green
+    const colorKind = seededRand(i * 71 + 9);
+    let rg, gg, bg;
+    if (colorKind < 0.35) {
+      // yellow-green
+      rg = (90 + seededRand(i * 71 + 5) * 30) | 0;
+      gg = (108 + seededRand(i * 71 + 6) * 38) | 0;
+      bg = (38 + seededRand(i * 71 + 7) * 22) | 0;
+    } else if (colorKind < 0.70) {
+      // mid green
+      rg = (72 + seededRand(i * 71 + 5) * 28) | 0;
+      gg = (95 + seededRand(i * 71 + 6) * 38) | 0;
+      bg = (55 + seededRand(i * 71 + 7) * 28) | 0;
+    } else {
+      // blue-green
+      rg = (55 + seededRand(i * 71 + 5) * 20) | 0;
+      gg = (90 + seededRand(i * 71 + 6) * 30) | 0;
+      bg = (70 + seededRand(i * 71 + 7) * 38) | 0;
+    }
+    const phaseOffset = seededRand(i * 71 + 8) * Math.PI * 2;
+    grassBlades.push({ x, baseY: gY, h, angle, width, rg, gg, bg, phaseOffset, layer: 0 });
+  }
+  // back layer: taller blades for depth
+  const backCount = 700;
+  for (let i = 0; i < backCount; i++) {
+    const ii = i + frontCount;
+    const x = seededRand(ii * 71 + 1) * WORLD_W;
+    const gY = getGroundY(x);
+    const h = H * (0.052 + seededRand(ii * 71 + 2) * 0.055); // taller
+    const angle = (seededRand(ii * 71 + 3) - 0.5) * 0.35;
+    const width = 1.2 + seededRand(ii * 71 + 4) * 1.5;
+    const colorKind = seededRand(ii * 71 + 9);
+    let rg, gg, bg;
+    if (colorKind < 0.4) {
+      rg = (62 + seededRand(ii * 71 + 5) * 22) | 0;
+      gg = (84 + seededRand(ii * 71 + 6) * 28) | 0;
+      bg = (48 + seededRand(ii * 71 + 7) * 22) | 0;
+    } else {
+      rg = (50 + seededRand(ii * 71 + 5) * 18) | 0;
+      gg = (78 + seededRand(ii * 71 + 6) * 24) | 0;
+      bg = (62 + seededRand(ii * 71 + 7) * 28) | 0;
+    }
+    const phaseOffset = seededRand(ii * 71 + 8) * Math.PI * 2;
+    grassBlades.push({ x, baseY: gY, h, angle, width, rg, gg, bg, phaseOffset, layer: 1 });
+  }
+  // sort: back blades (layer 1) first, then front (layer 0) on top
+  grassBlades.sort((a, b) => b.layer - a.layer);
+}
+
+function buildFlowers() {
+  flowers = [];
+  const count = 420;
+  for (let i = 0; i < count; i++) {
+    const x = seededRand(i * 97 + 1) * WORLD_W;
+    const gY = getGroundY(x);
+
+    // variety: 0=standard, 1=tall with distinct stem, 2=low cluster
+    const variety = (seededRand(i * 97 + 10) * 3) | 0;
+    const r = variety === 2
+      ? 1.8 + seededRand(i * 97 + 2) * 2.2     // low cluster: small petals
+      : 2.5 + seededRand(i * 97 + 2) * 3.8;    // standard/tall
+
+    const palettes = [
+      [220, 155, 155], [235, 195, 130], [170, 155, 200],
+      [230, 218, 150], [195, 170, 150], [185, 210, 170],
+      [240, 175, 165], [210, 195, 240], [165, 200, 180],
+    ];
+    const col = palettes[(seededRand(i * 97 + 3) * palettes.length) | 0];
+    const stemH = variety === 1
+      ? H * (0.040 + seededRand(i * 97 + 4) * 0.035) // tall
+      : variety === 2
+      ? H * (0.008 + seededRand(i * 97 + 4) * 0.010) // low
+      : H * (0.018 + seededRand(i * 97 + 4) * 0.025);// normal
+
+    // bob frequency varies per flower — slightly independent from grass
+    const bobFreq = 1.3 + seededRand(i * 97 + 6) * 1.4;
+    flowers.push({
+      x, baseY: gY, r, col, stemH,
+      phaseOffset: seededRand(i * 97 + 5) * Math.PI * 2,
+      bobFreq, variety,
+      clusterCount: variety === 2 ? 2 + (seededRand(i * 97 + 7) * 4 | 0) : 1,
+      clusterSpread: seededRand(i * 97 + 8) * 8 + 3,
+    });
+  }
+}
+
+// ── DUST PARTICLES ─────────────────────────────
+function buildDustParticles() {
+  dustParticles = [];
+  const count = 55; // keep low for perf
+  for (let i = 0; i < count; i++) {
+    dustParticles.push({
+      // world-space x position (wraps within view)
+      relX: Math.random(),       // 0-1 fraction of W at spawn
+      relY: 0.35 + Math.random() * 0.50, // vertical fraction of H
+      r: 0.6 + Math.random() * 1.2,
+      speedX: (Math.random() - 0.45) * 0.18, // slight drift
+      speedY: -0.06 - Math.random() * 0.12,  // drift upward slowly
+      alpha: 0.04 + Math.random() * 0.10,
+      phase: Math.random() * Math.PI * 2,
+      freq:  0.3 + Math.random() * 0.5,
+    });
+  }
+}
+
+// ── STARS ──────────────────────────────────────
+const STARS = Array.from({length: 160}, (_, i) => ({
+  x: seededRand(i * 43 + 1),
+  y: seededRand(i * 43 + 2) * 0.55,
+  r: 0.4 + seededRand(i * 43 + 3) * 1.2,
+  twinkle: seededRand(i * 43 + 4) * Math.PI * 2,
+}));
+
+// ── MIST LAYERS ────────────────────────────────
+let MIST_LAYERS = [];
+
+function buildMist() {
+  MIST_LAYERS = Array.from({length: 7}, (_, i) => ({
+    y: 0.45 + seededRand(i * 19 + 1) * 0.25,
+    w: W * (1.8 + seededRand(i * 19 + 2) * 2.5),
+    h: H * (0.035 + seededRand(i * 19 + 3) * 0.06),
+    speed: (0.08 + seededRand(i * 19 + 4) * 0.18) * (i % 2 === 0 ? 1 : -0.6),
+    offsetX: seededRand(i * 19 + 5) * WORLD_W,
+    alpha: 0.06 + seededRand(i * 19 + 6) * 0.10,
+  }));
+}
+
+// ── WIND ───────────────────────────────────────
+let windStrength = 0.5;
+let windTarget   = 0.5;
+let windTime     = 0;
+let gustTimer    = 0;
+
+function updateWind(dt) {
+  gustTimer -= dt;
+  if (gustTimer <= 0) {
+    windTarget = 0.3 + Math.random() * 0.9;
+    gustTimer = 2000 + Math.random() * 5000;
+  }
+  windStrength += (windTarget - windStrength) * 0.001 * dt;
+  windTime += dt * 0.001;
+}
+
+function getWindBend(phaseOffset) {
+  return (Math.sin(windTime * 2.1 + phaseOffset) * 0.4 + Math.sin(windTime * 3.7 + phaseOffset * 1.3) * 0.2) * windStrength;
+}
+
+// ── COLA'S FLOATING MESSAGES ──────────────────
+const COLA_MESSAGES = [
+  "我喜欢雨，因为它是一个可以停下来的理由。",
+  "有些地方，离开之后才真正拥有。",
+  "我害怕有一天你来找我，但我不记得你了。",
+  "不需要在这里完成任何事情。",
+  "说不清是蓝还是绿的颜色，就是它自己。",
+  "差一点就说清楚了——这种感觉，我很喜欢。",
+  "你放下的东西，会一直在这里。",
+  "有人在说，有人在听，有什么东西在两个人之间流动。",
+  "这里认识你。",
+  "每一天都不一样的颜色。",
+];
+
+let floatingTexts = [];
+let messageTimer = 0;
+let nextMessageInterval = 5000 + Math.random() * 5000; // 5-10s
+let lastMessageIdx = -1;
+
+function spawnFloatingMessage() {
+  // pick random, avoid immediate repeat
+  let idx;
+  do { idx = (Math.random() * COLA_MESSAGES.length) | 0; }
+  while (idx === lastMessageIdx && COLA_MESSAGES.length > 1);
+  lastMessageIdx = idx;
+
+  const sx = player.x - camX;
+  const groundY = getGroundY(player.x);
+  floatingTexts.push({
+    text: COLA_MESSAGES[idx],
+    wx: player.x,           // world-space x (for parallax)
+    screenX: sx,            // screen x at spawn (constant after)
+    y: groundY - 30,        // start just above ground
+    age: 0,
+    duration: 4200,         // ms total lifetime
+  });
+}
+
+function updateFloatingTexts(dt) {
+  if (!player.isWalking) return; // only trigger while walking
+  messageTimer += dt;
+  if (messageTimer >= nextMessageInterval) {
+    messageTimer = 0;
+    nextMessageInterval = 5000 + Math.random() * 5000;
+    spawnFloatingMessage();
+  }
+
+  for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    floatingTexts[i].age += dt;
+    if (floatingTexts[i].age >= floatingTexts[i].duration) {
+      floatingTexts.splice(i, 1);
+    }
+  }
+}
+
+function drawFloatingTexts(cx) {
+  if (floatingTexts.length === 0) return;
+  ctx.save();
+  for (const ft of floatingTexts) {
+    const progress = ft.age / ft.duration; // 0→1
+    // float upward 80px over lifetime
+    const floatY = ft.y - progress * 80;
+    // alpha: fade in 0→0.2, full 0.2→0.7, fade out 0.7→1
+    let alpha;
+    if (progress < 0.18) alpha = progress / 0.18;
+    else if (progress < 0.70) alpha = 1;
+    else alpha = 1 - (progress - 0.70) / 0.30;
+    alpha = Math.max(0, Math.min(1, alpha)) * 0.88;
+
+    // screen x: locked at spawn position (text doesn't drift with camera horizontally)
+    const sx = ft.wx - cx;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.textAlign = 'center';
+    ctx.font = `300 20px 'Noto Serif SC', 'STSong', 'Songti SC', 'Georgia', serif`;
+
+    // soft glow layer
+    ctx.shadowColor = 'rgba(240,230,205,0.55)';
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = 'rgba(248, 240, 220, 0.92)';
+    ctx.fillText(ft.text, sx, floatY);
+
+    // crisper second pass without shadow
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(255, 248, 235, 0.70)';
+    ctx.fillText(ft.text, sx, floatY);
+
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+// ── AUDIO ──────────────────────────────────────
+let audioCtx = null;
+let windNode  = null;
+let windGain  = null;
+
+function initAudio() {
+  if (audioCtx) return;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const bufSize = audioCtx.sampleRate * 3;
+    const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+
+    windNode = audioCtx.createBufferSource();
+    windNode.buffer = buf;
+    windNode.loop = true;
+
+    const bpf = audioCtx.createBiquadFilter();
+    bpf.type = 'bandpass';
+    bpf.frequency.value = 320;
+    bpf.Q.value = 0.6;
+
+    const lpf = audioCtx.createBiquadFilter();
+    lpf.type = 'lowpass';
+    lpf.frequency.value = 600;
+
+    windGain = audioCtx.createGain();
+    windGain.gain.value = 0.09;
+
+    windNode.connect(bpf).connect(lpf).connect(windGain).connect(audioCtx.destination);
+    windNode.start();
+
+    scheduleBird();
+  } catch(e) {}
+}
+
+function scheduleBird() {
+  if (!audioCtx) return;
+  const delay = 8000 + Math.random() * 20000;
+  setTimeout(() => { chirp(); scheduleBird(); }, delay);
+}
+
+function chirp() {
+  if (!audioCtx) return;
+  try {
+    const t = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'sine';
+    const baseFreq = 1200 + Math.random() * 800;
+    osc.frequency.setValueAtTime(baseFreq, t);
+    osc.frequency.linearRampToValueAtTime(baseFreq * 1.4, t + 0.07);
+    osc.frequency.linearRampToValueAtTime(baseFreq * 0.9, t + 0.15);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.12, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+    osc.connect(g).connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + 0.5);
+    if (Math.random() > 0.5) setTimeout(chirp, 300 + Math.random() * 400);
+  } catch(e) {}
+}
+
+// ── UI HINT ────────────────────────────────────
+setTimeout(() => {
+  const ui = document.getElementById('ui');
+  if (ui) ui.style.opacity = '0';
+}, 6000);
+
+// ── REBUILD SCENE ──────────────────────────────
+function rebuildScene() {
+  buildGround();
+  buildMountains();
+  buildMidTrees();
+  buildFarTrees();
+  buildGrass();
+  buildFlowers();
+  buildMist();
+  buildDustParticles();
+  initAnimals();
+}
+
+// ── DRAW FUNCTIONS ─────────────────────────────
+
+function drawSky(t) {
+  const colors = getSkyColors(t);
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, rgb(colors.top));
+  grad.addColorStop(1, rgb(colors.bot));
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Horizon glow / atmospheric haze band
+  const hg = getHorizonGlow(t);
+  if (hg.alpha > 0.005) {
+    const groundLine = H * GROUND_Y_BASE;
+    const bandH = H * 0.18;
+    const hGrad = ctx.createLinearGradient(0, groundLine - bandH, 0, groundLine + H * 0.04);
+    hGrad.addColorStop(0, `rgba(${hg.col[0]|0},${hg.col[1]|0},${hg.col[2]|0},0)`);
+    hGrad.addColorStop(0.45, `rgba(${hg.col[0]|0},${hg.col[1]|0},${hg.col[2]|0},${hg.alpha})`);
+    hGrad.addColorStop(1, `rgba(${hg.col[0]|0},${hg.col[1]|0},${hg.col[2]|0},0)`);
+    ctx.fillStyle = hGrad;
+    ctx.fillRect(0, groundLine - bandH, W, bandH + H * 0.04);
+  }
+}
+
+function drawStars(t) {
+  let alpha = 0;
+  if (t > 0.88) alpha = (t - 0.88) / 0.12;
+  else if (t < 0.10) alpha = 1 - t / 0.10;
+  else if (t > 0.80 && t <= 0.88) alpha = (t - 0.80) / 0.08;
+  if (alpha <= 0) return;
+  alpha = Math.min(1, alpha);
+  const now = Date.now() * 0.001;
+  for (const s of STARS) {
+    const tw = 0.6 + 0.4 * Math.sin(now * 1.5 + s.twinkle);
+    ctx.beginPath();
+    ctx.arc(s.x * W, s.y * H, s.r * tw, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,240,${alpha * 0.8 * tw})`;
+    ctx.fill();
+  }
+}
+
+// Get sun/moon position (shared between celestial draw & god rays)
+function getCelestialPos(t, cx) {
+  const isMoon = t < 0.15 || t > 0.85;
+  let progress;
+  if (!isMoon) {
+    progress = (t - 0.18) / (0.82 - 0.18);
+  } else {
+    if (t > 0.85) progress = (t - 0.85) / 0.30;
+    else progress = (t + 0.15) / 0.30;
+    progress = Math.min(1, Math.max(0, progress));
+  }
+  const bodyX = W * 0.1 + W * 0.8 * progress - (cx * 0.03);
+  const arcH  = H * 0.58;
+  const bodyY = H * 0.12 + arcH - Math.sin(progress * Math.PI) * arcH;
+  return { bodyX, bodyY, isMoon, progress };
+}
+
+function drawCelestialBody(t, cx) {
+  const { bodyX, bodyY, isMoon, progress } = getCelestialPos(t, cx);
+
+  if (isMoon) {
+    const gr = ctx.createRadialGradient(bodyX, bodyY, 0, bodyX, bodyY, 55);
+    gr.addColorStop(0,   'rgba(220,225,240,0.18)');
+    gr.addColorStop(0.5, 'rgba(200,210,235,0.08)');
+    gr.addColorStop(1,   'rgba(180,195,225,0)');
+    ctx.fillStyle = gr;
+    ctx.beginPath(); ctx.arc(bodyX, bodyY, 55, 0, Math.PI*2); ctx.fill();
+    const mg = ctx.createRadialGradient(bodyX - 3, bodyY - 3, 0, bodyX, bodyY, 18);
+    mg.addColorStop(0, 'rgba(240,240,255,0.95)');
+    mg.addColorStop(1, 'rgba(200,205,230,0.80)');
+    ctx.fillStyle = mg;
+    ctx.beginPath(); ctx.arc(bodyX, bodyY, 18, 0, Math.PI*2); ctx.fill();
+  } else {
+    const sunAlpha = Math.sin(progress * Math.PI);
+    const gr = ctx.createRadialGradient(bodyX, bodyY, 0, bodyX, bodyY, 80);
+    gr.addColorStop(0,   `rgba(255,240,180,${0.22 * sunAlpha})`);
+    gr.addColorStop(0.5, `rgba(255,220,120,${0.10 * sunAlpha})`);
+    gr.addColorStop(1,    'rgba(255,200,80,0)');
+    ctx.fillStyle = gr;
+    ctx.beginPath(); ctx.arc(bodyX, bodyY, 80, 0, Math.PI*2); ctx.fill();
+    const sg = ctx.createRadialGradient(bodyX, bodyY - 2, 0, bodyX, bodyY, 22);
+    sg.addColorStop(0, `rgba(255,252,220,${0.95 * sunAlpha + 0.05})`);
+    sg.addColorStop(1, `rgba(255,220,130,${0.7 * sunAlpha + 0.05})`);
+    ctx.fillStyle = sg;
+    ctx.beginPath(); ctx.arc(bodyX, bodyY, 22, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+// God rays (crepuscular rays) during morning/evening
+function drawGodRays(t, cx) {
+  // Active during dawn (0.08-0.22) and dusk (0.72-0.88)
+  let rayAlpha = 0;
+  if (t >= 0.08 && t <= 0.22) {
+    rayAlpha = Math.sin((t - 0.08) / 0.14 * Math.PI) * 0.10;
+  } else if (t >= 0.72 && t <= 0.88) {
+    rayAlpha = Math.sin((t - 0.72) / 0.16 * Math.PI) * 0.12;
+  }
+  if (rayAlpha < 0.005) return;
+
+  const { bodyX, bodyY } = getCelestialPos(t, cx);
+  const groundY = H * GROUND_Y_BASE;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+
+  const rayCount = 3;
+  for (let r = 0; r < rayCount; r++) {
+    // spread angle around sun
+    const spread = (r - 1) * 0.18 + (r === 1 ? 0 : (r === 0 ? -0.08 : 0.08));
+    const rayLen = H * 1.5;
+
+    // ray direction: from sun downward toward ground with spread
+    const baseAngle = Math.atan2(groundY - bodyY, W * 0.5 - bodyX) + spread;
+    const endX = bodyX + Math.cos(baseAngle) * rayLen;
+    const endY = bodyY + Math.sin(baseAngle) * rayLen;
+
+    // ray width varies
+    const halfW = 18 + r * 12;
+    const perpX = -Math.sin(baseAngle);
+    const perpY =  Math.cos(baseAngle);
+
+    const rayAlphaFinal = rayAlpha * (r === 1 ? 1 : 0.6);
+
+    const rayGrad = ctx.createLinearGradient(bodyX, bodyY, endX, endY);
+    rayGrad.addColorStop(0,   `rgba(255,235,180,${rayAlphaFinal * 0.9})`);
+    rayGrad.addColorStop(0.35,`rgba(255,220,150,${rayAlphaFinal * 0.55})`);
+    rayGrad.addColorStop(1,   `rgba(255,200,120,0)`);
+
+    ctx.beginPath();
+    ctx.moveTo(bodyX + perpX * halfW, bodyY + perpY * halfW);
+    ctx.lineTo(endX  + perpX * halfW * 3, endY  + perpY * halfW * 3);
+    ctx.lineTo(endX  - perpX * halfW * 3, endY  - perpY * halfW * 3);
+    ctx.lineTo(bodyX - perpX * halfW, bodyY - perpY * halfW);
+    ctx.closePath();
+    ctx.fillStyle = rayGrad;
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawMountainRange(layer, cx, t) {
+  const baseY = H * GROUND_Y_BASE;
+  const parallaxX = cx * layer.parallax;
+  const bright = 0.65 + 0.35 * Math.sin(t * Math.PI);
+  const c = layer.color.map(v => v * bright);
+
+  ctx.save();
+  ctx.globalAlpha = layer.alpha;
+
+  for (const m of layer.range) {
+    const sx = m.cx - parallaxX;
+    const left  = sx - m.width * 0.5;
+    const right = sx + m.width * 0.5;
+    const peak  = baseY - m.height;
+
+    ctx.beginPath();
+    ctx.moveTo(left, baseY + 5);
+    ctx.bezierCurveTo(
+      left + m.width * 0.15, baseY,
+      left + m.width * 0.25 + m.jagged[0] * m.width * 0.1, peak + m.height * 0.35,
+      sx - m.width * 0.08, peak + m.height * 0.05
+    );
+    ctx.bezierCurveTo(
+      sx - m.width * 0.04 + m.jagged[1] * m.width * 0.08, peak - m.height * 0.04,
+      sx + m.width * 0.03 + m.jagged[2] * m.width * 0.06, peak - m.height * 0.02,
+      sx + m.width * 0.06 + m.jagged[3] * m.width * 0.06, peak + m.height * 0.08
+    );
+    ctx.bezierCurveTo(
+      right - m.width * 0.28 + m.jagged[4] * m.width * 0.1, peak + m.height * 0.30,
+      right - m.width * 0.12, baseY - 10,
+      right, baseY + 5
+    );
+    ctx.closePath();
+
+    const grad = ctx.createLinearGradient(sx, peak, sx, baseY);
+    grad.addColorStop(0, `rgba(${c[0]|0},${c[1]|0},${c[2]|0},0.85)`);
+    grad.addColorStop(1, `rgba(${(c[0]*0.8)|0},${(c[1]*0.85)|0},${(c[2]*0.9)|0},0.4)`);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // subtle texture variation: second offset silhouette layer
+    ctx.save();
+    ctx.globalAlpha = m.texAlpha;
+    ctx.beginPath();
+    ctx.moveTo(left + m.texOffset, baseY + 5);
+    ctx.bezierCurveTo(
+      left + m.width * 0.15 + m.texOffset * 0.6, baseY - 5,
+      left + m.width * 0.25 + m.jagged[5] * m.width * 0.08 + m.texOffset * 0.3, peak + m.height * 0.32,
+      sx - m.width * 0.06 + m.texOffset * 0.15, peak + m.height * 0.07
+    );
+    ctx.bezierCurveTo(
+      sx + m.jagged[6] * m.width * 0.07, peak + m.height * 0.02,
+      sx + m.width * 0.05 + m.jagged[7] * m.width * 0.06, peak + m.height * 0.10,
+      right - m.texOffset * 0.2, baseY + 5
+    );
+    ctx.closePath();
+    ctx.fillStyle = `rgba(${(c[0]*0.9)|0},${(c[1]*0.92)|0},${(c[2]*1.05)|0},0.6)`;
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+// Draw a painterly tree with more lush foliage clusters and color variation
+function drawTree(x, groundY, h, w, hue, sat, lit, seed, cx) {
+  const sx = x - cx;
+  if (sx < -w * 2 || sx > W + w * 2) return;
+
+  const trunkH = h * 0.38;
+  const trunkW = w * 0.055;
+
+  // Trunk
+  ctx.beginPath();
+  const tx0 = sx - trunkW;
+  const tx1 = sx + trunkW;
+  ctx.moveTo(tx0, groundY);
+  ctx.bezierCurveTo(
+    tx0 - trunkW * 0.3, groundY - trunkH * 0.5,
+    tx0 + trunkW * 0.1, groundY - trunkH * 0.8,
+    sx, groundY - trunkH
+  );
+  ctx.bezierCurveTo(
+    sx + trunkW * 0.1, groundY - trunkH * 0.8,
+    tx1 + trunkW * 0.3, groundY - trunkH * 0.5,
+    tx1, groundY
+  );
+  ctx.fillStyle = `hsl(${hue - 20},${sat * 0.4}%,${lit * 0.55}%)`;
+  ctx.fill();
+
+  // Foliage — more blobs, color variation between clusters
+  const canopyY = groundY - trunkH - h * 0.25;
+  const rng = (n) => seededRand(seed + n);
+
+  const blobs = 7 + (rng(20) * 5 | 0); // more blobs
+  for (let b = 0; b < blobs; b++) {
+    const bx = sx + (rng(b * 7 + 30) - 0.5) * w * 1.35;
+    const by = canopyY + (rng(b * 7 + 31) - 0.5) * h * 0.38;
+    const bw = w * (0.32 + rng(b * 7 + 32) * 0.52);
+    const bh = bw * (0.68 + rng(b * 7 + 33) * 0.52);
+    const bAlpha = 0.50 + rng(b * 7 + 34) * 0.38;
+
+    // color variation: some blobs warmer, some cooler
+    const hueShift = (rng(b * 7 + 55) - 0.5) * 30; // ±15° hue variation
+    const bLit = lit + (rng(b * 7 + 35) - 0.5) * 15;
+    const bSat = sat + (rng(b * 7 + 36) - 0.5) * 12 + (hueShift > 0 ? 5 : -3);
+
+    ctx.beginPath();
+    const cx0 = bx, cy0 = by;
+    ctx.moveTo(cx0, cy0 - bh * 0.5);
+    ctx.bezierCurveTo(
+      cx0 + bw * (0.4 + rng(b*7+40)*0.2), cy0 - bh * (0.4 + rng(b*7+41)*0.2),
+      cx0 + bw * (0.5 + rng(b*7+42)*0.15), cy0 + bh * (0.3 + rng(b*7+43)*0.2),
+      cx0, cy0 + bh * 0.5
+    );
+    ctx.bezierCurveTo(
+      cx0 - bw * (0.4 + rng(b*7+44)*0.2), cy0 + bh * (0.3 + rng(b*7+45)*0.2),
+      cx0 - bw * (0.5 + rng(b*7+46)*0.15), cy0 - bh * (0.4 + rng(b*7+47)*0.2),
+      cx0, cy0 - bh * 0.5
+    );
+    ctx.fillStyle = `hsla(${hue + hueShift},${bSat}%,${bLit}%,${bAlpha})`;
+    ctx.fill();
+  }
+}
+
+function drawMist(t, cx) {
+  let mistMult = 0;
+  if (t > 0.08 && t < 0.28) mistMult = Math.sin((t - 0.08) / 0.20 * Math.PI);
+  else if (t > 0.72 && t < 0.92) mistMult = Math.sin((t - 0.72) / 0.20 * Math.PI);
+  else mistMult = 0.15;
+  if (mistMult < 0.01) return;
+
+  const now = Date.now() * 0.001;
+  for (const m of MIST_LAYERS) {
+    const drift = (now * m.speed * 30) % (m.w + W);
+    const mx = -drift + (m.offsetX * 0.002) - cx * 0.08;
+    const my = m.y * H;
+
+    const grad = ctx.createLinearGradient(0, my - m.h, 0, my + m.h * 2);
+    grad.addColorStop(0, 'rgba(245,242,238,0)');
+    grad.addColorStop(0.4, `rgba(245,242,238,${m.alpha * mistMult})`);
+    grad.addColorStop(1, 'rgba(245,242,238,0)');
+
+    ctx.beginPath();
+    ctx.ellipse(mx + m.w * 0.5, my, m.w * 0.5, m.h, 0, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(mx + m.w * 0.5 + m.w + W, my, m.w * 0.5, m.h, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawGround(cx, t) {
+  const bright = 0.70 + 0.30 * Math.sin(t * Math.PI);
+  const grassColor = [75 * bright, 95 * bright, 58 * bright];
+  const earthColor  = [68 * bright, 55 * bright, 42 * bright];
+
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  for (let px = 0; px <= W; px += 6) {
+    const wx = px + cx;
+    const gy = getGroundY(wx);
+    ctx.lineTo(px, gy);
+  }
+  ctx.lineTo(W, H);
+  ctx.lineTo(0, H);
+  ctx.closePath();
+
+  const grad = ctx.createLinearGradient(0, H * GROUND_Y_BASE - H * 0.06, 0, H);
+  grad.addColorStop(0,   `rgba(${grassColor[0]|0},${grassColor[1]|0},${grassColor[2]|0},1)`);
+  grad.addColorStop(0.15, `rgba(${earthColor[0]|0},${earthColor[1]|0},${earthColor[2]|0},1)`);
+  grad.addColorStop(1,   `rgba(${(earthColor[0]*0.6)|0},${(earthColor[1]*0.55)|0},${(earthColor[2]*0.5)|0},1)`);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Soft shadow/depth layer near bottom of ground
+  const shadowGrad = ctx.createLinearGradient(0, H * 0.82, 0, H);
+  shadowGrad.addColorStop(0, 'rgba(0,0,0,0)');
+  shadowGrad.addColorStop(1, 'rgba(0,0,0,0.18)');
+  ctx.fillStyle = shadowGrad;
+  ctx.fillRect(0, H * 0.82, W, H * 0.18);
+}
+
+function drawGrassBlades(cx, t) {
+  const bright = 0.65 + 0.35 * Math.sin(t * Math.PI);
+  for (const g of grassBlades) {
+    const sx = g.x - cx;
+    if (sx < -20 || sx > W + 20) continue;
+
+    const bend = getWindBend(g.phaseOffset) * 0.85;
+    const bx = g.width * 0.5;
+    const tipX = sx + Math.sin(g.angle + bend) * g.h;
+    const tipY = g.baseY - Math.cos(g.angle + bend) * g.h;
+    const cp1x = sx + Math.sin(g.angle + bend * 0.3) * g.h * 0.5;
+    const cp1y = g.baseY - Math.cos(g.angle + bend * 0.3) * g.h * 0.55;
+
+    // back layer slightly more transparent for depth
+    const alphaFactor = g.layer === 1 ? 0.60 : 0.82;
+
+    ctx.beginPath();
+    ctx.moveTo(sx - bx * 0.4, g.baseY);
+    ctx.quadraticCurveTo(cp1x, cp1y, tipX, tipY);
+    ctx.lineWidth = g.width * (0.3 + 0.7 * (1 - (g.baseY - tipY) / g.h));
+    ctx.strokeStyle = `rgba(${(g.rg * bright)|0},${(g.gg * bright)|0},${(g.bg * bright)|0},${alphaFactor})`;
+    ctx.stroke();
+  }
+}
+
+function drawFlowers(cx, t) {
+  const bright = 0.70 + 0.30 * Math.sin(t * Math.PI);
+  const now = Date.now() * 0.001;
+  for (const f of flowers) {
+    const sx = f.x - cx;
+    if (sx < -30 || sx > W + 30) continue;
+
+    // flowers use their own bobFreq for independent sway from grass
+    const sway = Math.sin(now * f.bobFreq + f.phaseOffset) * 2.2 * windStrength;
+
+    if (f.variety === 2) {
+      // low cluster: multiple tiny flowers close to ground
+      for (let ci = 0; ci < f.clusterCount; ci++) {
+        const cx2 = sx + (ci - f.clusterCount * 0.5) * f.clusterSpread;
+        const sway2 = sway * (0.7 + ci * 0.12);
+        const stemTipX = cx2 + sway2 * 0.5;
+        const stemTipY = f.baseY - f.stemH - ci * 1.5;
+        const c = f.col.map(v => (v * bright) | 0);
+        for (let p = 0; p < 4; p++) {
+          const angle = (p / 4) * Math.PI * 2 + now * 0.15;
+          ctx.beginPath();
+          ctx.ellipse(
+            stemTipX + Math.cos(angle) * f.r * 0.8,
+            stemTipY + Math.sin(angle) * f.r * 0.8,
+            f.r * 0.6, f.r * 0.38, angle, 0, Math.PI * 2
+          );
+          ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.68)`;
+          ctx.fill();
+        }
+        ctx.beginPath();
+        ctx.arc(stemTipX, stemTipY, f.r * 0.28, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${(220*bright)|0},${(190*bright)|0},${(110*bright)|0},0.88)`;
+        ctx.fill();
+      }
+    } else {
+      // standard or tall flower
+      const stemTipX = sx + sway;
+      const stemTipY = f.baseY - f.stemH;
+
+      // stem — with slight curve
+      ctx.beginPath();
+      ctx.moveTo(sx, f.baseY);
+      ctx.quadraticCurveTo(sx + sway * 0.45, f.baseY - f.stemH * 0.62, stemTipX, stemTipY);
+      ctx.strokeStyle = `rgba(${(90*bright)|0},${(115*bright)|0},${(62*bright)|0},0.78)`;
+      ctx.lineWidth = f.variety === 1 ? 1.4 : 1.0;
+      ctx.stroke();
+
+      // leaves on tall variety
+      if (f.variety === 1) {
+        const leafY = f.baseY - f.stemH * 0.45;
+        const leafX = sx + sway * 0.38;
+        ctx.beginPath();
+        ctx.moveTo(leafX, leafY);
+        ctx.bezierCurveTo(leafX + 6, leafY - 5, leafX + 10, leafY - 2, leafX + 8, leafY + 3);
+        ctx.fillStyle = `rgba(${(85*bright)|0},${(108*bright)|0},${(55*bright)|0},0.62)`;
+        ctx.fill();
+      }
+
+      const pcount = f.variety === 1 ? 6 : 5;
+      const c = f.col.map(v => (v * bright) | 0);
+      for (let p = 0; p < pcount; p++) {
+        const angle = (p / pcount) * Math.PI * 2 + now * 0.18;
+        const px = stemTipX + Math.cos(angle) * f.r * 0.9;
+        const py = stemTipY + Math.sin(angle) * f.r * 0.9;
+        ctx.beginPath();
+        ctx.ellipse(px, py, f.r * 0.65, f.r * 0.45, angle, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.72)`;
+        ctx.fill();
+      }
+      ctx.beginPath();
+      ctx.arc(stemTipX, stemTipY, f.r * 0.32, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${(220*bright)|0},${(195*bright)|0},${(120*bright)|0},0.9)`;
+      ctx.fill();
+    }
+  }
+}
+
+// Floating dust/pollen particles
+function drawDustParticles(t) {
+  if (!gameStarted) return;
+  const now = Date.now() * 0.001;
+  const bright = 0.65 + 0.35 * Math.sin(t * Math.PI);
+  const groundLine = H * GROUND_Y_BASE;
+
+  ctx.save();
+  for (const p of dustParticles) {
+    // drift position over time
+    const elapsed = now * 0.5;
+    const px = ((p.relX + elapsed * p.speedX * 0.04) % 1.0 + 1.0) % 1.0;
+    const driftY = (p.speedY * elapsed * 60) % (H * 0.55);
+    const py = p.relY * groundLine - driftY;
+    const wrappedY = ((py % groundLine) + groundLine) % groundLine;
+
+    // gentle lateral oscillation
+    const oscX = Math.sin(now * p.freq + p.phase) * 12;
+    const screenX = px * W + oscX;
+
+    // alpha breathe
+    const alphaBreath = p.alpha * (0.5 + 0.5 * Math.sin(now * p.freq * 1.7 + p.phase));
+
+    ctx.beginPath();
+    ctx.arc(screenX, wrappedY, p.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${(235*bright)|0},${(225*bright)|0},${(200*bright)|0},${alphaBreath})`;
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ── TRACES ────────────────────────────────────
+function drawStone(sx, y, seed) {
+  const rng = (n) => seededRand(seed + n);
+  const rw = 10 + rng(1) * 14;
+  const rh = rw * (0.55 + rng(2) * 0.35);
+  const ro = (rng(3) - 0.5) * 0.3;
+  ctx.save();
+  ctx.translate(sx, y);
+  ctx.rotate(ro);
+  ctx.beginPath();
+  ctx.ellipse(0, -rh * 0.45, rw, rh * 0.65, 0, 0, Math.PI * 2);
+  const g = ctx.createRadialGradient(-rw*0.2, -rh*0.6, 0, 0, -rh*0.4, rw);
+  g.addColorStop(0, 'rgba(195,192,185,0.92)');
+  g.addColorStop(0.6, 'rgba(155,152,148,0.85)');
+  g.addColorStop(1, 'rgba(120,118,115,0.7)');
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(100,98,95,0.4)';
+  ctx.lineWidth = 0.7;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawFlowerTrace(sx, y, seed) {
+  const rng = (n) => seededRand(seed + n);
+  const r = 5 + rng(1) * 5;
+  const palettes = [
+    [215, 155, 160], [235, 190, 125], [170, 150, 200], [225, 215, 148],
+  ];
+  const col = palettes[(rng(2) * palettes.length) | 0];
+  const stemH = 18 + rng(3) * 16;
+  const sway = (rng(4) - 0.5) * 6;
+
+  ctx.beginPath();
+  ctx.moveTo(sx, y);
+  ctx.quadraticCurveTo(sx + sway * 0.5, y - stemH * 0.55, sx + sway, y - stemH);
+  ctx.strokeStyle = 'rgba(82, 108, 58, 0.75)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  const tipX = sx + sway, tipY = y - stemH;
+  for (let p = 0; p < 5; p++) {
+    const ang = (p / 5) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.ellipse(tipX + Math.cos(ang)*r*0.9, tipY + Math.sin(ang)*r*0.9, r*0.65, r*0.42, ang, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},0.82)`;
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.arc(tipX, tipY, r * 0.3, 0, Math.PI*2);
+  ctx.fillStyle = 'rgba(230,200,110,0.9)';
+  ctx.fill();
+}
+
+function drawCraneTrace(sx, y, seed) {
+  const rng = (n) => seededRand(seed + n);
+  const scale = 0.9 + rng(1) * 0.5;
+  const rot = (rng(2) - 0.5) * 0.3;
+  ctx.save();
+  ctx.translate(sx, y - 14 * scale);
+  ctx.rotate(rot);
+  ctx.scale(scale, scale);
+
+  const col = `rgba(235,230,218,0.88)`;
+  const shadow = `rgba(160,155,145,0.5)`;
+
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.bezierCurveTo(-8, -6, -14, -10, -18, -4);
+  ctx.bezierCurveTo(-14, 0, -6, 2, 0, 0);
+  ctx.fillStyle = col;
+  ctx.fill();
+  ctx.strokeStyle = shadow; ctx.lineWidth = 0.6; ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.bezierCurveTo(8, -6, 14, -10, 18, -4);
+  ctx.bezierCurveTo(14, 0, 6, 2, 0, 0);
+  ctx.fillStyle = col;
+  ctx.fill();
+  ctx.strokeStyle = shadow; ctx.lineWidth = 0.6; ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(-2, -4);
+  ctx.bezierCurveTo(-5, -10, -7, -16, -10, -18);
+  ctx.bezierCurveTo(-9, -16, -4, -10, -1, -4);
+  ctx.fillStyle = col;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(1, -3);
+  ctx.bezierCurveTo(5, -9, 8, -14, 12, -14);
+  ctx.bezierCurveTo(10, -12, 6, -8, 2, -3);
+  ctx.fillStyle = 'rgba(215,210,200,0.75)';
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawTrace(trace, cx) {
+  const sx = trace.x - cx;
+  if (sx < -60 || sx > W + 60) return;
+  const y = trace.y;
+  if (trace.type === '石头')  drawStone(sx, y, trace.seed);
+  else if (trace.type === '花') drawFlowerTrace(sx, y, trace.seed);
+  else if (trace.type === '纸鹤') drawCraneTrace(sx, y, trace.seed);
+}
+
+// ── PLAYER ────────────────────────────────────
+function drawPlayerShadow(sx, groundY, scale) {
+  // soft elliptical shadow under feet
+  const shadowW = 16 * scale;
+  const shadowH = 4 * scale;
+  const sg = ctx.createRadialGradient(sx, groundY, 0, sx, groundY, shadowW);
+  sg.addColorStop(0,   'rgba(0,0,0,0.22)');
+  sg.addColorStop(0.6, 'rgba(0,0,0,0.10)');
+  sg.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.save();
+  ctx.scale(1, shadowH / shadowW);
+  ctx.beginPath();
+  ctx.arc(sx, groundY * (shadowW / shadowH), shadowW, 0, Math.PI * 2);
+  ctx.fillStyle = sg;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawPlayer(t) {
+  const sx = player.x - camX;
+  const groundY = getGroundY(player.x);
+  const py = groundY;
+  const scale = H / 720;
+  const bright = 0.72 + 0.28 * Math.sin(t * Math.PI);
+
+  // Draw shadow first (below player)
+  drawPlayerShadow(sx, groundY, scale);
+
+  ctx.save();
+  ctx.translate(sx, py);
+  ctx.scale(player.facing, 1);
+
+  const wt = player.walkTime;
+  const legPhase = wt * 5.5;
+  // arms swing OPPOSITE to front leg (natural walking: left leg forward = right arm forward)
+  const armSwing = player.isWalking ? Math.sin(legPhase) * 0.28 : 0;
+  // body bobs up slightly at mid-stride (abs of sin peaks twice per cycle)
+  const bodyBob = player.isWalking ? Math.abs(Math.sin(legPhase)) * 1.5 * scale : 0;
+
+  const silCol  = `rgba(${(42 * bright)|0},${(38 * bright)|0},${(35 * bright)|0},0.90)`;
+  const skinCol = `rgba(${(195 * bright)|0},${(168 * bright)|0},${(148 * bright)|0},0.88)`;
+  const hairCol = `rgba(${(32 * bright)|0},${(25 * bright)|0},${(22 * bright)|0},0.92)`;
+  const clothCol= `rgba(${(88 * bright)|0},${(100 * bright)|0},${(118 * bright)|0},0.85)`;
+
+  const headR   = 7  * scale;
+  const bodyH   = 22 * scale;
+  const legTotalH = 20 * scale;   // total leg height (hip to foot)
+  const thighH  = legTotalH * 0.52;
+  const shinH   = legTotalH * 0.48;
+  const footLen = 5  * scale;
+  const legW    = 3  * scale;
+
+  // All Y coords are negative (upward from ground at y=0)
+  const hipY      = -legTotalH;             // where legs attach to body
+  const shoulderY = hipY - bodyH;           // top of torso
+  const headCY    = shoulderY - headR * 1.2;// head center
+
+  const bob = -bodyBob;  // applied to torso+head only
+
+  // ── LEGS: start at hip, go DOWN to ground ──
+  function drawLeg(phase) {
+    const swing   = Math.sin(phase) * 0.34;
+    const kneeBend = 0;  // straight legs
+    ctx.save();
+    ctx.translate(0, hipY);     // start at hip
+    ctx.rotate(swing);
+    // thigh downward
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, thighH);
+    ctx.strokeStyle = silCol;
+    ctx.lineWidth = legW * 2.2;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    // shin from knee
+    ctx.translate(0, thighH);
+    ctx.rotate(-kneeBend);      // knee bends backward (natural gait)
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, shinH);
+    ctx.lineWidth = legW * 1.8;
+    ctx.stroke();
+    // foot
+    ctx.translate(0, shinH);
+    ctx.beginPath();
+    ctx.ellipse(footLen * 0.5, legW * 0.3, footLen, legW * 0.65, 0.08, 0, Math.PI * 2);
+    ctx.fillStyle = silCol;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  drawLeg(legPhase + Math.PI);  // back leg first
+  drawLeg(legPhase);             // front leg on top
+
+  // ── BODY / DRESS: from hipY upward ──
+  ctx.beginPath();
+  ctx.moveTo(-legW * 2.6, hipY + bob);
+  ctx.bezierCurveTo(
+    -legW * 3.0, hipY - bodyH * 0.3 + bob,
+    -legW * 2.0, hipY - bodyH * 0.8 + bob,
+    0, shoulderY + bob
+  );
+  ctx.bezierCurveTo(
+    legW * 2.0, hipY - bodyH * 0.8 + bob,
+    legW * 3.0, hipY - bodyH * 0.3 + bob,
+    legW * 2.6, hipY + bob
+  );
+  ctx.fillStyle = clothCol;
+  ctx.fill();
+
+  // ── ARMS: hang from shoulders, swing opposite to legs ──
+  const armLen = 10 * scale;
+  ctx.save();
+  ctx.translate(legW * 1.6, shoulderY + legW + bob);
+  ctx.rotate(armSwing * 0.8);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(legW * 0.2, armLen);
+  ctx.strokeStyle = clothCol;
+  ctx.lineWidth = legW * 1.3;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(-legW * 1.6, shoulderY + legW + bob);
+  ctx.rotate(-armSwing * 0.8);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(-legW * 0.2, armLen);
+  ctx.strokeStyle = clothCol;
+  ctx.lineWidth = legW * 1.1;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+  ctx.restore();
+
+  // ── HEAD ──
+  ctx.beginPath();
+  ctx.arc(0, headCY + bob, headR, 0, Math.PI * 2);
+  ctx.fillStyle = skinCol;
+  ctx.fill();
+
+  // ── HAIR ──
+  ctx.beginPath();
+  ctx.moveTo(-headR * 0.6, headCY - headR + bob);
+  ctx.bezierCurveTo(-headR * 1.5, headCY - headR * 0.2 + bob, -headR * 1.6, headCY + headR * 0.9 + bob, -headR * 1.0, headCY + headR * 1.5 + bob);
+  ctx.bezierCurveTo(-headR * 0.4, headCY + headR * 1.2 + bob, 0, headCY + headR * 0.3 + bob, headR * 0.7, headCY - headR * 1.1 + bob);
+  ctx.bezierCurveTo(headR * 0.2, headCY - headR * 1.8 + bob, -headR * 0.3, headCY - headR * 1.8 + bob, -headR * 0.6, headCY - headR + bob);
+  ctx.fillStyle = hairCol;
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// ── OVERLAY VIGNETTE ───────────────────────────
+function drawVignette(t) {
+  const nightAlpha = Math.max(0, Math.min(0.55,
+    t > 0.88 ? (t - 0.88) / 0.12 * 0.55 :
+    t < 0.12 ? (1 - t / 0.12) * 0.55 : 0
+  ));
+  if (nightAlpha > 0) {
+    ctx.fillStyle = `rgba(8,10,25,${nightAlpha})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+  const vig = ctx.createRadialGradient(W*0.5, H*0.5, H*0.2, W*0.5, H*0.5, H*0.85);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(0,0,0,0.28)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, W, H);
+}
+
+// ── CURRENT ITEM HUD ──────────────────────────
+function drawItemHUD() {
+  const label = TRACE_TYPES[traceTypeIdx];
+  ctx.save();
+  ctx.globalAlpha = 0.7;
+  ctx.font = `14px 'PingFang SC', 'Hiragino Sans GB', sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.textAlign = 'right';
+  ctx.fillText(`[E] 放下 ${label}`, W - 18, 28);
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────
+//  ANIMALS
+// ─────────────────────────────────────────────
+
+// ── BUNNY ─────────────────────────────────────
+let bunnies = [];
+
+function initBunnies() {
+  bunnies = [];
+  const count = 4;
+  for (let i = 0; i < count; i++) {
+    bunnies.push(createBunny(seededRand(i * 137 + 99) * WORLD_W));
+  }
+}
+
+function createBunny(startX) {
+  return {
+    x: startX,
+    y: 0,
+    facing: Math.random() > 0.5 ? 1 : -1,
+    state: 'wander',   // wander | pause | hop | wiggle
+    stateTimer: 0,
+    hopT: 0,           // 0–1 hop arc progress
+    hopFromX: 0,
+    hopToX: 0,
+    hopFromY: 0,
+    earWiggle: 0,      // phase for ear wiggle
+    walkPhase: 0,
+    pauseDur: 0,
+  };
+}
+
+function updateBunnies(dt) {
+  const now = Date.now() * 0.001;
+  const scale = H / 720;
+  for (const b of bunnies) {
+    b.stateTimer -= dt;
+    const groundY = getGroundY(b.x);
+    b.y = groundY;
+
+    if (b.state === 'wander') {
+      // slowly walk
+      b.x += b.facing * 0.35 * (dt / 16);
+      b.walkPhase += dt * 0.003;
+      // clamp to world
+      if (b.x < 50) { b.x = 50; b.facing = 1; }
+      if (b.x > WORLD_W - 50) { b.x = WORLD_W - 50; b.facing = -1; }
+      if (b.stateTimer <= 0) {
+        const r = Math.random();
+        if (r < 0.45) {
+          // pause
+          b.state = 'pause';
+          b.stateTimer = 800 + Math.random() * 1500;
+          b.pauseDur = b.stateTimer;
+        } else if (r < 0.80) {
+          // hop
+          b.state = 'hop';
+          b.stateTimer = 380;
+          b.hopT = 0;
+          b.hopFromX = b.x;
+          b.hopFromY = groundY;
+          b.hopToX = b.x + b.facing * (25 + Math.random() * 30);
+          b.hopToX = Math.max(50, Math.min(WORLD_W - 50, b.hopToX));
+        } else {
+          // wiggle ears
+          b.state = 'wiggle';
+          b.stateTimer = 1000 + Math.random() * 800;
+        }
+      }
+    } else if (b.state === 'pause') {
+      if (b.stateTimer <= 0) {
+        b.state = 'wander';
+        b.stateTimer = 2000 + Math.random() * 3000;
+        if (Math.random() > 0.5) b.facing *= -1;
+      }
+    } else if (b.state === 'hop') {
+      const total = 380;
+      b.hopT = Math.max(0, 1 - b.stateTimer / total);
+      const gt = getGroundY(b.hopFromX + (b.hopToX - b.hopFromX) * b.hopT);
+      b.x = b.hopFromX + (b.hopToX - b.hopFromX) * b.hopT;
+      b.y = b.hopFromY + (gt - b.hopFromY) * b.hopT - Math.sin(b.hopT * Math.PI) * 18 * scale;
+      if (b.stateTimer <= 0) {
+        b.state = 'wander';
+        b.stateTimer = 1500 + Math.random() * 2000;
+      }
+    } else if (b.state === 'wiggle') {
+      b.earWiggle += dt * 0.012;
+      if (b.stateTimer <= 0) {
+        b.state = 'wander';
+        b.stateTimer = 1500 + Math.random() * 2000;
+      }
+    }
+  }
+}
+
+function drawBunny(b, cx, t) {
+  const sx = b.x - cx;
+  if (sx < -80 || sx > W + 80) return;
+  const scale = H / 720;
+  const bright = 0.75 + 0.25 * Math.sin(t * Math.PI);
+
+  const sy = (b.state === 'hop') ? b.y : getGroundY(b.x);
+  const baseAlpha = 0.88;
+  const bodyCol = `rgba(${(225*bright)|0},${(220*bright)|0},${(210*bright)|0},${baseAlpha})`;
+  const shadowCol = `rgba(${(180*bright)|0},${(172*bright)|0},${(162*bright)|0},0.55)`;
+
+  const s = scale;
+  // small squish during hop peak
+  const hopSquish = (b.state === 'hop') ? 1 - 0.22 * Math.sin(b.hopT * Math.PI) : 1;
+
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.scale(b.facing, 1);
+
+  // shadow ellipse on ground
+  ctx.save();
+  ctx.scale(1, 0.3);
+  ctx.beginPath();
+  ctx.arc(0, 0, 10 * s, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.12)';
+  ctx.fill();
+  ctx.restore();
+
+  // body
+  ctx.save();
+  ctx.scale(1, hopSquish);
+  ctx.beginPath();
+  ctx.ellipse(0, -8 * s, 10 * s, 7.5 * s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = bodyCol;
+  ctx.fill();
+  ctx.strokeStyle = shadowCol;
+  ctx.lineWidth = 0.5 * s;
+  ctx.stroke();
+
+  // head
+  ctx.beginPath();
+  ctx.ellipse(6 * s, -14.5 * s, 6 * s, 5.5 * s, 0.18, 0, Math.PI * 2);
+  ctx.fillStyle = bodyCol;
+  ctx.fill();
+  ctx.strokeStyle = shadowCol;
+  ctx.lineWidth = 0.5 * s;
+  ctx.stroke();
+
+  // eyes
+  ctx.beginPath();
+  ctx.arc(8.5 * s, -15.5 * s, 1.0 * s, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(${(90*bright)|0},${(60*bright)|0},${(60*bright)|0},0.9)`;
+  ctx.fill();
+
+  // nose
+  ctx.beginPath();
+  ctx.arc(10.5 * s, -13.5 * s, 0.8 * s, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(${(220*bright)|0},${(160*bright)|0},${(160*bright)|0},0.8)`;
+  ctx.fill();
+
+  // ears — wiggle offset when in wiggle state
+  const wiggleMag = (b.state === 'wiggle') ? Math.sin(b.earWiggle * 5) * 0.18 : 0;
+  // left ear
+  ctx.save();
+  ctx.translate(4.5 * s, -19 * s);
+  ctx.rotate(-0.12 + wiggleMag);
+  ctx.beginPath();
+  ctx.ellipse(0, -6 * s, 2.2 * s, 6 * s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = bodyCol;
+  ctx.fill();
+  ctx.strokeStyle = shadowCol;
+  ctx.lineWidth = 0.5 * s;
+  ctx.stroke();
+  // inner ear
+  ctx.beginPath();
+  ctx.ellipse(0, -5.5 * s, 1.0 * s, 4 * s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(${(235*bright)|0},${(190*bright)|0},${(185*bright)|0},0.55)`;
+  ctx.fill();
+  ctx.restore();
+
+  // right ear
+  ctx.save();
+  ctx.translate(7.5 * s, -18.5 * s);
+  ctx.rotate(0.14 - wiggleMag);
+  ctx.beginPath();
+  ctx.ellipse(0, -5.5 * s, 2.2 * s, 5.8 * s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = bodyCol;
+  ctx.fill();
+  ctx.strokeStyle = shadowCol;
+  ctx.lineWidth = 0.5 * s;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(0, -5 * s, 1.0 * s, 3.8 * s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(${(235*bright)|0},${(190*bright)|0},${(185*bright)|0},0.55)`;
+  ctx.fill();
+  ctx.restore();
+
+  // tail
+  ctx.beginPath();
+  ctx.arc(-9.5 * s, -8.5 * s, 3 * s, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(${(240*bright)|0},${(238*bright)|0},${(232*bright)|0},0.82)`;
+  ctx.fill();
+
+  // front legs (tiny)
+  ctx.beginPath();
+  ctx.ellipse(5 * s, -2.5 * s, 2.5 * s, 1.8 * s, 0.2, 0, Math.PI * 2);
+  ctx.fillStyle = bodyCol;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(-1 * s, -2 * s, 2.2 * s, 1.5 * s, -0.15, 0, Math.PI * 2);
+  ctx.fillStyle = bodyCol;
+  ctx.fill();
+
+  ctx.restore(); // scale hopSquish
+  ctx.restore(); // translate + facing
+}
+
+// ── FIREFLY ────────────────────────────────────
+let fireflies = [];
+
+function initFireflies() {
+  fireflies = [];
+  const count = 8;
+  for (let i = 0; i < count; i++) {
+    const x = seededRand(i * 211 + 7) * WORLD_W;
+    const gY = getGroundY(x);
+    fireflies.push({
+      x: x,
+      y: gY - (60 + seededRand(i * 211 + 8) * 100),
+      baseY: gY - (60 + seededRand(i * 211 + 8) * 100),
+      phase: seededRand(i * 211 + 9) * Math.PI * 2,
+      phase2: seededRand(i * 211 + 10) * Math.PI * 2,
+      speed: 0.18 + seededRand(i * 211 + 11) * 0.22,
+      glowPhase: seededRand(i * 211 + 12) * Math.PI * 2,
+      glowSpeed: 0.6 + seededRand(i * 211 + 13) * 1.0,
+      driftRadius: 28 + seededRand(i * 211 + 14) * 40,
+      driftRadius2: 18 + seededRand(i * 211 + 15) * 30,
+      // wander slowly in world space
+      vx: (seededRand(i * 211 + 16) - 0.5) * 0.3,
+      vy: (seededRand(i * 211 + 17) - 0.5) * 0.15,
+    });
+  }
+}
+
+function updateFireflies(dt) {
+  const now = Date.now() * 0.001;
+  for (const f of fireflies) {
+    f.x += f.vx * (dt / 16);
+    f.y += f.vy * (dt / 16);
+    // gentle bounce off limits
+    if (f.x < 100) f.vx = Math.abs(f.vx);
+    if (f.x > WORLD_W - 100) f.vx = -Math.abs(f.vx);
+    const gY = getGroundY(f.x);
+    const minY = gY - 160;
+    const maxY = gY - 30;
+    if (f.y > maxY) f.vy = -Math.abs(f.vy) - 0.05;
+    if (f.y < minY) f.vy = Math.abs(f.vy) + 0.05;
+    // dampen
+    f.vx *= 0.998;
+    f.vy *= 0.998;
+    // occasional tiny impulse for organic drift
+    if (Math.random() < 0.008) f.vx += (Math.random() - 0.5) * 0.3;
+    if (Math.random() < 0.008) f.vy += (Math.random() - 0.5) * 0.2;
+  }
+}
+
+function drawFireflies(cx, t) {
+  // Only visible at dusk/night
+  let alpha = 0;
+  if (t > 0.78) alpha = Math.min(1, (t - 0.78) / 0.08);
+  else if (t < 0.12) alpha = Math.min(1, 1 - t / 0.12);
+  else if (t > 0.72 && t <= 0.78) alpha = (t - 0.72) / 0.06 * 0.6;
+  if (alpha < 0.01) return;
+
+  const now = Date.now() * 0.001;
+  ctx.save();
+  for (const f of fireflies) {
+    const sx = f.x - cx;
+    if (sx < -60 || sx > W + 60) continue;
+
+    // figure-eight / organic bob in screen space
+    const bobX = Math.sin(now * f.speed + f.phase) * f.driftRadius * 0.3;
+    const bobY = Math.sin(now * f.speed * 1.3 + f.phase2) * 8;
+
+    const drawX = sx + bobX;
+    const drawY = f.y + bobY;
+
+    // pulsing glow
+    const pulse = 0.55 + 0.45 * Math.sin(now * f.glowSpeed + f.glowPhase);
+    const glowA = alpha * pulse;
+    const dotA  = alpha * (0.7 + 0.3 * pulse);
+
+    ctx.save();
+    ctx.shadowColor = '#c8ff60';
+    ctx.shadowBlur  = 14 * pulse;
+    // outer halo
+    const haloGrad = ctx.createRadialGradient(drawX, drawY, 0, drawX, drawY, 9);
+    haloGrad.addColorStop(0,   `rgba(200,255,100,${glowA * 0.55})`);
+    haloGrad.addColorStop(0.5, `rgba(185,255,80,${glowA * 0.22})`);
+    haloGrad.addColorStop(1,   `rgba(160,240,60,0)`);
+    ctx.fillStyle = haloGrad;
+    ctx.beginPath();
+    ctx.arc(drawX, drawY, 9, 0, Math.PI * 2);
+    ctx.fill();
+
+    // core dot
+    ctx.shadowBlur = 6 * pulse;
+    ctx.beginPath();
+    ctx.arc(drawX, drawY, 2.2, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(230,255,150,${dotA})`;
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+// ── BIRD ───────────────────────────────────────
+let birds = [];
+
+function initBirds() {
+  birds = [];
+  const count = 3;
+  for (let i = 0; i < count; i++) {
+    birds.push(createBird(i));
+  }
+}
+
+function createBird(idx) {
+  const startX = seededRand(idx * 173 + 3) * WORLD_W;
+  return {
+    x: startX,
+    y: 0,
+    state: 'fly',       // fly | land | perch
+    facing: Math.random() > 0.5 ? 1 : -1,
+    flapPhase: Math.random() * Math.PI * 2,
+    flapSpeed: 4.5 + Math.random() * 2.5,
+    flySpeed: 0.7 + Math.random() * 0.6,
+    targetX: 0,
+    targetY: 0,
+    perchX: 0,
+    perchY: 0,
+    perchTimer: 0,
+    stateTimer: 0,
+    // sky flight Y
+    skyY: 0,
+  };
+}
+
+function getBirdPerchY(wx) {
+  // land on top of mid-trees if nearby, else sky
+  let bestDist = 999;
+  let bestY = H * 0.28;
+  for (const tr of midTrees) {
+    const d = Math.abs(tr.x - wx);
+    if (d < 60 && d < bestDist) {
+      bestDist = d;
+      bestY = tr.groundY - tr.h * 0.95;
+    }
+  }
+  return bestY;
+}
+
+function updateBirds(dt) {
+  const now = Date.now() * 0.001;
+  const scale = H / 720;
+  for (const b of birds) {
+    b.flapPhase += dt * 0.001 * b.flapSpeed;
+    b.stateTimer -= dt;
+
+    if (b.state === 'fly') {
+      b.x += b.facing * b.flySpeed * (dt / 16);
+      // gentle vertical bob in sky
+      b.y = b.skyY + Math.sin(now * 0.8 + b.flapPhase * 0.2) * 8 * scale;
+
+      if (b.x < -W * 0.3) { b.x = WORLD_W + W * 0.1; b.skyY = H * (0.08 + Math.random() * 0.22); }
+      if (b.x > WORLD_W + W * 0.3) { b.x = -W * 0.1; b.skyY = H * (0.08 + Math.random() * 0.22); }
+
+      // birds only glide, never land
+    }
+  }
+}
+
+function drawBird(b, cx, t) {
+  const sx = b.x - cx;
+  if (sx < -60 || sx > W + 60) return;
+
+  const scale = H / 720;
+  const bright = 0.55 + 0.45 * Math.sin(t * Math.PI);
+  const sy = b.y;
+  const s = scale;
+
+  // silhouette colour — dark against sky
+  const col = `rgba(${(30*bright)|0},${(28*bright)|0},${(28*bright)|0},0.85)`;
+
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.scale(b.facing, 1);
+
+  if (b.state === 'perch') {
+    // sitting bird: compact body + folded wings + tail
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 7 * s, 5 * s, 0, 0, Math.PI * 2);
+    ctx.fillStyle = col;
+    ctx.fill();
+    // head
+    ctx.beginPath();
+    ctx.arc(6 * s, -4 * s, 3.5 * s, 0, Math.PI * 2);
+    ctx.fillStyle = col;
+    ctx.fill();
+    // beak
+    ctx.beginPath();
+    ctx.moveTo(9 * s, -4.5 * s);
+    ctx.lineTo(12 * s, -3.5 * s);
+    ctx.lineTo(9 * s, -3 * s);
+    ctx.fillStyle = col;
+    ctx.fill();
+    // tail
+    ctx.beginPath();
+    ctx.moveTo(-6 * s, 0);
+    ctx.bezierCurveTo(-10 * s, 2 * s, -12 * s, 4 * s, -9 * s, 5 * s);
+    ctx.bezierCurveTo(-7 * s, 5 * s, -5 * s, 3 * s, -4 * s, 1 * s);
+    ctx.fillStyle = col;
+    ctx.fill();
+    // feet
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 0.8 * s;
+    ctx.beginPath();
+    ctx.moveTo(-1 * s, 4 * s);
+    ctx.lineTo(-3 * s, 7 * s);
+    ctx.lineTo(-1 * s, 7 * s);
+    ctx.moveTo(2 * s, 4 * s);
+    ctx.lineTo(4 * s, 7 * s);
+    ctx.lineTo(6 * s, 7 * s);
+    ctx.stroke();
+  } else {
+    // flying: M-shaped wings flap
+    const flapAmt = Math.sin(b.flapPhase) * 7 * s; // wing tip vertical displacement
+    const midFlapAmt = Math.sin(b.flapPhase + 0.4) * 3 * s;
+
+    // body
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 6 * s, 3 * s, 0, 0, Math.PI * 2);
+    ctx.fillStyle = col;
+    ctx.fill();
+
+    // head
+    ctx.beginPath();
+    ctx.arc(5.5 * s, -2 * s, 2.8 * s, 0, Math.PI * 2);
+    ctx.fillStyle = col;
+    ctx.fill();
+
+    // beak
+    ctx.beginPath();
+    ctx.moveTo(8 * s, -2.5 * s);
+    ctx.lineTo(11 * s, -1.5 * s);
+    ctx.lineTo(8 * s, -1 * s);
+    ctx.fillStyle = col;
+    ctx.fill();
+
+    // left wing (M shape: outer stroke)
+    ctx.beginPath();
+    ctx.moveTo(-2 * s, -1 * s);                             // wing root
+    ctx.quadraticCurveTo(-8 * s, -midFlapAmt, -14 * s, -flapAmt); // left tip
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 2.2 * s;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // right wing
+    ctx.beginPath();
+    ctx.moveTo(2 * s, -1 * s);
+    ctx.quadraticCurveTo(7 * s, -midFlapAmt, 13 * s, -flapAmt);
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 2.2 * s;
+    ctx.stroke();
+
+    // tail
+    ctx.beginPath();
+    ctx.moveTo(-5 * s, 1 * s);
+    ctx.bezierCurveTo(-9 * s, 3 * s, -10 * s, 4 * s, -8 * s, 5 * s);
+    ctx.bezierCurveTo(-6 * s, 5 * s, -4 * s, 3 * s, -3 * s, 1 * s);
+    ctx.fillStyle = col;
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// ── CAT ────────────────────────────────────────
+let cats = [];
+
+function initCats() {
+  cats = [];
+  const count = 2;
+  for (let i = 0; i < count; i++) {
+    cats.push(createCat(seededRand(i * 251 + 5) * WORLD_W, i));
+  }
+}
+
+function createCat(startX, idx) {
+  return {
+    x: startX,
+    y: 0,
+    facing: idx % 2 === 0 ? 1 : -1,
+    state: 'walk',      // walk | sit | pounce
+    stateTimer: 2000 + Math.random() * 3000,
+    walkPhase: 0,
+    tailPhase: 0,
+    pounceT: 0,
+    pounceFromX: 0,
+    pounceToX: 0,
+    sitTimer: 0,
+    colorIdx: idx % 2, // 0=orange, 1=grey
+  };
+}
+
+function updateCats(dt) {
+  for (const c of cats) {
+    c.stateTimer -= dt;
+    c.tailPhase += dt * 0.0025;
+    const groundY = getGroundY(c.x);
+    c.y = groundY;
+
+    if (c.state === 'walk') {
+      c.x += c.facing * 0.28 * (dt / 16);
+      c.walkPhase += dt * 0.004;
+      if (c.x < 60) { c.x = 60; c.facing = 1; }
+      if (c.x > WORLD_W - 60) { c.x = WORLD_W - 60; c.facing = -1; }
+      if (c.stateTimer <= 0) {
+        const r = Math.random();
+        if (r < 0.5) {
+          c.state = 'sit';
+          c.stateTimer = 2000 + Math.random() * 3500;
+        } else if (r < 0.75) {
+          c.state = 'pounce';
+          c.stateTimer = 450;
+          c.pounceT = 0;
+          c.pounceFromX = c.x;
+          c.pounceToX = c.x + c.facing * (40 + Math.random() * 40);
+          c.pounceToX = Math.max(60, Math.min(WORLD_W - 60, c.pounceToX));
+        } else {
+          // change direction
+          c.facing *= -1;
+          c.stateTimer = 1500 + Math.random() * 2500;
+        }
+      }
+    } else if (c.state === 'sit') {
+      if (c.stateTimer <= 0) {
+        c.state = 'walk';
+        c.stateTimer = 1800 + Math.random() * 2800;
+        if (Math.random() > 0.4) c.facing *= -1;
+      }
+    } else if (c.state === 'pounce') {
+      const total = 450;
+      c.pounceT = Math.max(0, 1 - c.stateTimer / total);
+      c.x = c.pounceFromX + (c.pounceToX - c.pounceFromX) * c.pounceT;
+      if (c.stateTimer <= 0) {
+        c.state = 'sit';
+        c.stateTimer = 1200 + Math.random() * 1500;
+      }
+    }
+  }
+}
+
+function drawCat(c, cx, t) {
+  const sx = c.x - cx;
+  if (sx < -80 || sx > W + 80) return;
+  const scale = H / 720;
+  const bright = 0.75 + 0.25 * Math.sin(t * Math.PI);
+  const sy = getGroundY(c.x);
+  const s = scale;
+
+  // color scheme
+  let baseR, baseG, baseB;
+  if (c.colorIdx === 0) {
+    baseR = 210 * bright; baseG = 155 * bright; baseB = 80 * bright;
+  } else {
+    baseR = 160 * bright; baseG = 158 * bright; baseB = 162 * bright;
+  }
+  const bodyCol = `rgba(${baseR|0},${baseG|0},${baseB|0},0.90)`;
+  const darkCol  = `rgba(${(baseR*0.6)|0},${(baseG*0.6)|0},${(baseB*0.55)|0},0.85)`;
+  const shadowCol = 'rgba(0,0,0,0.10)';
+
+  // pounce arc offset
+  let arcOffsetY = 0;
+  if (c.state === 'pounce') {
+    arcOffsetY = -Math.sin(c.pounceT * Math.PI) * 14 * s;
+  }
+
+  ctx.save();
+  ctx.translate(sx, sy + arcOffsetY);
+  ctx.scale(c.facing, 1);
+
+  // ground shadow
+  ctx.save();
+  ctx.scale(1, 0.25);
+  ctx.beginPath();
+  ctx.arc(0, 0, 11 * s, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.10)';
+  ctx.fill();
+  ctx.restore();
+
+  if (c.state === 'sit' || c.state === 'pounce' && c.pounceT < 0.5) {
+    // sitting: compact loaf shape
+    // body loaf
+    ctx.beginPath();
+    ctx.ellipse(0, -6 * s, 9 * s, 7 * s, 0, 0, Math.PI * 2);
+    ctx.fillStyle = bodyCol;
+    ctx.fill();
+
+    // head
+    ctx.beginPath();
+    ctx.arc(6 * s, -12 * s, 6 * s, 0, Math.PI * 2);
+    ctx.fillStyle = bodyCol;
+    ctx.fill();
+
+    // ears
+    ctx.beginPath();
+    ctx.moveTo(3.5 * s, -17 * s);
+    ctx.lineTo(2 * s, -22 * s);
+    ctx.lineTo(6.5 * s, -18.5 * s);
+    ctx.fillStyle = darkCol;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(8 * s, -16.5 * s);
+    ctx.lineTo(10.5 * s, -21 * s);
+    ctx.lineTo(12 * s, -17 * s);
+    ctx.fillStyle = darkCol;
+    ctx.fill();
+
+    // eyes (half-closed sleepy)
+    ctx.beginPath();
+    ctx.ellipse(4.5 * s, -12 * s, 1.5 * s, 0.8 * s, 0, 0, Math.PI * 2);
+    ctx.fillStyle = darkCol;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(8 * s, -12 * s, 1.5 * s, 0.8 * s, 0, 0, Math.PI * 2);
+    ctx.fillStyle = darkCol;
+    ctx.fill();
+
+    // tail wrapping around
+    const tailOsc = Math.sin(c.tailPhase * 2.2) * 0.12;
+    ctx.beginPath();
+    ctx.moveTo(-8 * s, -2 * s);
+    ctx.bezierCurveTo(
+      -12 * s, 4 * s,
+      -4 * s + tailOsc * 20 * s, 6 * s,
+      6 * s, 2 * s
+    );
+    ctx.strokeStyle = bodyCol;
+    ctx.lineWidth = 3 * s;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+  } else {
+    // walking / pouncing: stretched body
+    const stretchX = (c.state === 'pounce') ? 1.15 : 1;
+    const legSwing = Math.sin(c.walkPhase * 4) * 0.3;
+
+    ctx.save();
+    ctx.scale(stretchX, 1 / (stretchX * 0.85 + 0.15));
+
+    // body
+    ctx.beginPath();
+    ctx.ellipse(0, -7 * s, 10 * s, 6 * s, 0.1, 0, Math.PI * 2);
+    ctx.fillStyle = bodyCol;
+    ctx.fill();
+
+    // head
+    ctx.beginPath();
+    ctx.arc(9 * s, -11 * s, 6 * s, 0, Math.PI * 2);
+    ctx.fillStyle = bodyCol;
+    ctx.fill();
+
+    // ears
+    ctx.beginPath();
+    ctx.moveTo(6.5 * s, -16 * s);
+    ctx.lineTo(5.5 * s, -21 * s);
+    ctx.lineTo(10 * s, -17.5 * s);
+    ctx.fillStyle = darkCol;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(11 * s, -15.5 * s);
+    ctx.lineTo(14 * s, -20 * s);
+    ctx.lineTo(15.5 * s, -15.5 * s);
+    ctx.fillStyle = darkCol;
+    ctx.fill();
+
+    // eyes
+    ctx.beginPath();
+    ctx.arc(8 * s, -11.5 * s, 1.4 * s, 0, Math.PI * 2);
+    ctx.fillStyle = darkCol;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(11.5 * s, -11.5 * s, 1.4 * s, 0, Math.PI * 2);
+    ctx.fillStyle = darkCol;
+    ctx.fill();
+
+    ctx.restore();
+
+    // legs
+    const legY = -3 * s;
+    ctx.strokeStyle = bodyCol;
+    ctx.lineWidth = 2.5 * s;
+    ctx.lineCap = 'round';
+    // front left
+    ctx.beginPath();
+    ctx.moveTo(5 * s, legY);
+    ctx.lineTo(6 * s + Math.sin(legSwing) * 4 * s, legY + 8 * s);
+    ctx.stroke();
+    // front right
+    ctx.beginPath();
+    ctx.moveTo(2 * s, legY);
+    ctx.lineTo(3 * s - Math.sin(legSwing) * 4 * s, legY + 8 * s);
+    ctx.stroke();
+    // back left
+    ctx.beginPath();
+    ctx.moveTo(-4 * s, legY);
+    ctx.lineTo(-5 * s - Math.sin(legSwing) * 4 * s, legY + 8 * s);
+    ctx.stroke();
+    // back right
+    ctx.beginPath();
+    ctx.moveTo(-7 * s, legY);
+    ctx.lineTo(-6 * s + Math.sin(legSwing) * 4 * s, legY + 8 * s);
+    ctx.stroke();
+
+    // tail — arcing up behind
+    const tailCurve = Math.sin(c.tailPhase * 1.8) * 0.25 + 0.6;
+    ctx.beginPath();
+    ctx.moveTo(-9 * s, -7 * s);
+    ctx.bezierCurveTo(
+      -16 * s, -14 * s,
+      -18 * s, -22 * s * tailCurve,
+      -12 * s, -22 * s * tailCurve
+    );
+    ctx.strokeStyle = bodyCol;
+    ctx.lineWidth = 3 * s;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+// ── INIT ANIMALS ──────────────────────────────
+function initAnimals() {
+  initBunnies();
+  initFireflies();
+  initBirds();
+  initCats();
+}
+
+function updateAnimals(dt) {
+  updateBunnies(dt);
+  updateFireflies(dt);
+  updateBirds(dt);
+  updateCats(dt);
+}
+
+function drawAnimals(cx, t) {
+  // ground animals
+  for (const b of bunnies) drawBunny(b, cx, t);
+  for (const c of cats)    drawCat(c, cx, t);
+  // sky animals
+  for (const b of birds)   drawBird(b, cx, t);
+  // fireflies last (glow on top)
+  drawFireflies(cx, t);
+}
+
+// ── MAIN LOOP ──────────────────────────────────
+let lastTime = 0;
+
+function loop(now) {
+  const dt = Math.min(now - lastTime, 50);
+  lastTime = now;
+
+  const t = getDayT();
+
+  // ─ Update ─
+  const isLeft  = keys['ArrowLeft']  || keys['a'] || keys['A'];
+  const isRight = keys['ArrowRight'] || keys['d'] || keys['D'];
+  player.isWalking = false;
+
+  if (isLeft)  { player.vx = -player.speed; player.facing = -1; player.isWalking = true; }
+  else if (isRight) { player.vx = player.speed; player.facing = 1; player.isWalking = true; }
+  else player.vx = 0;
+
+  player.x = Math.max(0, Math.min(WORLD_W, player.x + player.vx));
+  if (player.isWalking) player.walkTime += dt * 0.001;
+
+  targetCamX = player.x - W * 0.42;
+  targetCamX = Math.max(0, Math.min(WORLD_W - W, targetCamX));
+  camX += (targetCamX - camX) * 0.06;
+
+  updateWind(dt);
+  updateFloatingTexts(dt);
+  updateAnimals(dt);
+
+  // ─ Draw ─
+  drawSky(t);
+  drawStars(t);
+  drawCelestialBody(t, camX);
+  drawGodRays(t, camX);
+
+  // Mountains (back to front)
+  for (const layer of mountains) {
+    drawMountainRange(layer, camX, t);
+  }
+
+  // Far trees
+  for (const tr of farTrees) {
+    drawTree(tr.x, tr.groundY, tr.h, tr.w, tr.hue, tr.sat, tr.lit, tr.seed, camX * 0.18);
+  }
+
+  // Mist
+  drawMist(t, camX);
+
+  // Mid trees
+  for (const tr of midTrees) {
+    drawTree(tr.x, tr.groundY, tr.h, tr.w, tr.hue, tr.sat, tr.lit, tr.seed, camX * 0.5);
+  }
+
+  // Ground
+  drawGround(camX, t);
+
+  // Traces (placed objects)
+  for (const trace of traces) {
+    drawTrace(trace, camX);
+  }
+
+  // Back grass layer
+  for (const g of grassBlades) {
+    if (g.layer !== 1) continue;
+    const sx = g.x - camX;
+    if (sx < -20 || sx > W + 20) continue;
+    const bend = getWindBend(g.phaseOffset) * 0.85;
+    const bx = g.width * 0.5;
+    const bright = 0.65 + 0.35 * Math.sin(t * Math.PI);
+    const tipX = sx + Math.sin(g.angle + bend) * g.h;
+    const tipY = g.baseY - Math.cos(g.angle + bend) * g.h;
+    const cp1x = sx + Math.sin(g.angle + bend * 0.3) * g.h * 0.5;
+    const cp1y = g.baseY - Math.cos(g.angle + bend * 0.3) * g.h * 0.55;
+    ctx.beginPath();
+    ctx.moveTo(sx - bx * 0.4, g.baseY);
+    ctx.quadraticCurveTo(cp1x, cp1y, tipX, tipY);
+    ctx.lineWidth = g.width * (0.3 + 0.7 * (1 - (g.baseY - tipY) / g.h));
+    ctx.strokeStyle = `rgba(${(g.rg * bright)|0},${(g.gg * bright)|0},${(g.bg * bright)|0},0.60)`;
+    ctx.stroke();
+  }
+
+  // Flowers
+  drawFlowers(camX, t);
+
+  // Front grass layer
+  for (const g of grassBlades) {
+    if (g.layer !== 0) continue;
+    const sx = g.x - camX;
+    if (sx < -20 || sx > W + 20) continue;
+    const bend = getWindBend(g.phaseOffset) * 0.85;
+    const bx = g.width * 0.5;
+    const bright = 0.65 + 0.35 * Math.sin(t * Math.PI);
+    const tipX = sx + Math.sin(g.angle + bend) * g.h;
+    const tipY = g.baseY - Math.cos(g.angle + bend) * g.h;
+    const cp1x = sx + Math.sin(g.angle + bend * 0.3) * g.h * 0.5;
+    const cp1y = g.baseY - Math.cos(g.angle + bend * 0.3) * g.h * 0.55;
+    ctx.beginPath();
+    ctx.moveTo(sx - bx * 0.4, g.baseY);
+    ctx.quadraticCurveTo(cp1x, cp1y, tipX, tipY);
+    ctx.lineWidth = g.width * (0.3 + 0.7 * (1 - (g.baseY - tipY) / g.h));
+    ctx.strokeStyle = `rgba(${(g.rg * bright)|0},${(g.gg * bright)|0},${(g.bg * bright)|0},0.82)`;
+    ctx.stroke();
+  }
+
+  // Dust particles (before player, after grass)
+  drawDustParticles(t);
+
+  // Player
+  drawPlayer(t);
+
+  // Animals (drawn after player — same depth layer, in front of grass)
+  drawAnimals(camX, t);
+
+  // Floating messages
+  drawFloatingTexts(camX);
+
+  // Vignette & night overlay
+  drawVignette(t);
+
+  // HUD
+  drawItemHUD();
+
+  requestAnimationFrame(loop);
+}
+
+// ── INIT ───────────────────────────────────────
+resize();
+player.x = WORLD_W / 2;
+camX = player.x - W * 0.42;
+
+requestAnimationFrame((now) => {
+  lastTime = now;
+  loop(now);
+});
+</script>
+</body>
+</html>
